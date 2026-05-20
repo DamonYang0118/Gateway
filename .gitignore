@@ -1,0 +1,52 @@
+# macOS / editor files
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+
+# Python cache and tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Build and packaging output
+build/
+dist/
+*.egg-info/
+*.spec
+*.manifest
+*.exe
+*.dll
+*.pyd
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Local runtime configuration and state
+.env
+.env.*
+config.json
+config.localmock.json
+danfoss_last_good.localmock.json
+
+# Keep example configuration files versioned.
+!*.example.json
