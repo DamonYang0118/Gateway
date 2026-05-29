@@ -6,12 +6,16 @@ REM Usage:
 REM   run_850a_diagnostics.bat
 REM   run_850a_diagnostics.bat config.customer.json
 REM   run_850a_diagnostics.bat config.customer.json http://172.28.238.109/html/xml.cgi
+REM   run_850a_diagnostics.bat config.customer.json http://172.28.238.109/html/xml.cgi field-report.json
 
 set CONFIG=%~1
 if "%CONFIG%"=="" set CONFIG=config.customer.example.json
 
 set ENDPOINT_ARG=
 if not "%~2"=="" set ENDPOINT_ARG=--endpoint "%~2"
+
+set REPORT_ARG=
+if not "%~3"=="" set REPORT_ARG=--report-json "%~3"
 
 python --version >nul 2>nul
 if errorlevel 1 (
@@ -21,6 +25,6 @@ if errorlevel 1 (
 )
 
 echo [INFO] Running 850A diagnostics with config: %CONFIG%
-python diagnose_850a.py --config "%CONFIG%" %ENDPOINT_ARG%
+python diagnose_850a.py --config "%CONFIG%" %ENDPOINT_ARG% %REPORT_ARG%
 
 endlocal

@@ -8,7 +8,7 @@ import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Iterable, List, Mapping, Optional
+from typing import Dict, Iterable, List, Mapping, Optional, Union
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -64,6 +64,43 @@ class DanfossPointValue:
     status_code: Optional[int] = None
     pending: bool = False
     error: Optional[int] = None
+
+
+@dataclass
+class DanfossParameterInfo:
+    cid: Optional[int]
+    vid: Optional[int]
+    name: str = ""
+    unit: str = ""
+    rw: str = ""
+    raw: Optional[dict] = None
+
+
+@dataclass
+class DanfossHistoryRecord:
+    timestamp: Optional[datetime]
+    value: Optional[float]
+    raw_value: str
+    unit: str = ""
+
+
+@dataclass
+class DanfossAlarmRef:
+    state: str
+    alarm_id: str
+    name: str = ""
+    time: str = ""
+    device: str = ""
+    description: str = ""
+
+
+@dataclass
+class DanfossDeviceAlarms:
+    active: List[DanfossAlarmRef]
+    acked: List[DanfossAlarmRef]
+    cleared: List[DanfossAlarmRef]
+    newest_time: str = ""
+    oldest_time: str = ""
 
 
 @dataclass
@@ -175,6 +212,28 @@ class Danfoss850AClient:
             devices.append(item)
         return devices
 
+    def read_parm_info(self, device_id: str) -> List[DanfossParameterInfo]:
+        attrs = _common_attrs("read_parm_info", self.lang)
+        attrs["device_id"] = device_id
+        response_text = self.post_xml(_xml_empty("cmd", attrs))
+        root = _parse_xml_response(response_text, "read_parm_info")
+        parms_root = root.find("parms")
+        parms = parms_root.findall("parm") if parms_root is not None else root.findall("parm")
+        result = []
+        for parm in parms:
+            raw = dict(parm.attrib)
+            result.append(
+                DanfossParameterInfo(
+                    cid=_optional_int(raw.get("cid")),
+                    vid=_optional_int(raw.get("vid")),
+                    name=raw.get("name", ""),
+                    unit=raw.get("unit", ""),
+                    rw=raw.get("rw", ""),
+                    raw=raw,
+                )
+            )
+        return result
+
     def read_device_history_cfg(self, node: int, nodetype: int = 16) -> List[dict]:
         attrs = _common_attrs("read_device_history_cfg", self.lang)
         attrs.update({"nodetype": str(nodetype), "node": str(node)})
@@ -187,6 +246,98 @@ class Danfoss850AClient:
                 item[_local_name(child.tag)] = (child.text or "").strip()
             configs.append(item)
         return configs
+
+    def read_history(
+        self,
+        nodetype: int,
+        node: int,
+        cid: Optional[int] = None,
+        vid: Optional[int] = None,
+        mod: Optional[int] = None,
+        point: Optional[int] = None,
+        start: Optional[Union[datetime, int, float]] = None,
+        stop: Optional[Union[datetime, int, float]] = None,
+        sample_rate: int = 30,
+        units: Optional[str] = None,
+    ) -> List[DanfossHistoryRecord]:
+        attrs = _common_attrs("read_history", self.lang)
+        attrs.update(
+            {
+                "nodetype": str(nodetype),
+                "node": str(node),
+                "sample_rate": str(sample_rate),
+                "units": units or self.units,
+            }
+        )
+        if cid is not None:
+            attrs["cid"] = str(cid)
+        if vid is not None:
+            attrs["vid"] = str(vid)
+        if mod is not None:
+            attrs["mod"] = str(mod)
+        if point is not None:
+            attrs["point"] = str(point)
+
+        cmd = ET.Element("cmd", attrs)
+        if start is not None:
+            _append_time_element(cmd, "starttime", start)
+        if stop is not None:
+            _append_time_element(cmd, "stoptime", stop)
+
+        response_text = self.post_xml(ET.tostring(cmd, encoding="unicode", short_empty_elements=True))
+        return parse_read_history_response(response_text)
+
+    def read_device_alarms(
+        self,
+        nodetype: int,
+        node: int,
+        mod: int = 0,
+        point: int = 0,
+    ) -> DanfossDeviceAlarms:
+        attrs = _common_attrs("read_device_alarms", self.lang)
+        attrs.update(
+            {
+                "nodetype": str(nodetype),
+                "node": str(node),
+                "mod": str(mod),
+                "point": str(point),
+            }
+        )
+        response_text = self.post_xml(_xml_empty("cmd", attrs))
+        root = _parse_xml_response(response_text, "read_device_alarms")
+        return parse_device_alarms_response(root)
+
+    def read_generic_alarms(
+        self,
+        nodetype: int = 16,
+        node: int = 0,
+        index: int = 0,
+        count: int = 100,
+    ) -> List[DanfossAlarmRef]:
+        attrs = _common_attrs("read_generic_alarms", self.lang)
+        attrs.update(
+            {
+                "nodetype": str(nodetype),
+                "node": str(node),
+                "index": str(index),
+                "count": str(count),
+            }
+        )
+        response_text = self.post_xml(_xml_empty("cmd", attrs))
+        root = _parse_xml_response(response_text, "read_generic_alarms")
+        alarms = []
+        for alarm in root.findall(".//alarm"):
+            alarms.append(
+                DanfossAlarmRef(
+                    state=alarm.get("state", ""),
+                    alarm_id=alarm.get("id", "") or (alarm.text or "").strip(),
+                    name=alarm.get("name", ""),
+                    time=_find_child_text(alarm, "time"),
+                    device=_find_child_text(alarm, "device"),
+                    description=_find_child_text(alarm, "description"),
+                )
+            )
+        return alarms
 
     def start_history_query(
         self,
@@ -255,6 +406,7 @@ class Danfoss850AClient:
     def post_xml(self, xml_text: str, binary: bool = False):
         if self.auth_mode in ("session", "session_token") and not self.session_token:
             self.authenticate()
+        xml_text = self._with_cmd_credentials(xml_text)
         try:
             return self._post(xml_text, include_auth=True, binary=binary)
         except (HTTPError, DanfossApiError) as exc:
@@ -291,6 +443,7 @@ class Danfoss850AClient:
             "Accept": "text/xml, */*",
             "Accept-Encoding": "identity",
             "User-Agent": "DanfossGateway/1.0",
+            "Connection": "close",
         }
         if include_auth:
             auth_header = self._auth_header()
@@ -313,6 +466,8 @@ class Danfoss850AClient:
     def _auth_header(self) -> str:
         if self.auth_mode in ("none", "disabled", ""):
             return ""
+        if self.auth_mode in ("cmd_credentials", "cmd", "xml_credentials"):
+            return ""
         if self.auth_mode in ("basic", "basic_header", "header"):
             if not self.username or not self.password:
                 return ""
@@ -320,9 +475,28 @@ class Danfoss850AClient:
                 "ascii"
             )
             return f"Basic {token}"
+        if self.auth_mode in ("aksm_plain_header", "plain_header", "strict_header"):
+            if not self.username or not self.password:
+                return ""
+            return f"{self.username}:{self.password}"
         if self.auth_mode in ("session", "session_token"):
             return self.session_token or ""
         raise DanfossApiError(f"Unsupported Danfoss auth_mode: {self.auth_mode}")
+
+    def _with_cmd_credentials(self, xml_text: str) -> str:
+        if self.auth_mode not in ("cmd_credentials", "cmd", "xml_credentials"):
+            return xml_text
+        if not self.username or not self.password:
+            return xml_text
+        try:
+            root = ET.fromstring(xml_text)
+        except ET.ParseError:
+            return xml_text
+        if _local_name(root.tag) != "cmd":
+            return xml_text
+        root.set("user", self.username)
+        root.set("password", self.password)
+        return ET.tostring(root, encoding="unicode", short_empty_elements=True)
 
     def _build_ssl_context(self):
         if not self.endpoint_url.lower().startswith("https://"):
@@ -406,6 +580,57 @@ def parse_read_val_response(
     return values
 
 
+def parse_read_history_response(xml_text: str) -> List[DanfossHistoryRecord]:
+    root = _parse_xml_response(xml_text, "read_history")
+    unit = _find_child_text(root, "unit")
+    records: List[DanfossHistoryRecord] = []
+
+    start_epoch = _optional_int(_find_nested_text(root, "starttime", "epoch"))
+    sample_rate = _optional_int(root.attrib.get("real_sample_rate")) or _optional_int(
+        root.attrib.get("sample_rate")
+    )
+    for index, elem in enumerate(root.findall("data/y")):
+        raw_value = (elem.text or "").strip()
+        if raw_value in ("", "-----", "*****", "----", "*"):
+            continue
+        timestamp = None
+        if start_epoch is not None and sample_rate:
+            timestamp = datetime.fromtimestamp(start_epoch + index * sample_rate)
+        records.append(
+            DanfossHistoryRecord(
+                timestamp=timestamp,
+                value=_numeric_value(raw_value),
+                raw_value=raw_value,
+                unit=unit,
+            )
+        )
+
+    for elem in root.findall("record"):
+        raw_value = _find_child_text(elem, "value")
+        if raw_value in ("", "-----", "*****", "----", "*"):
+            continue
+        timestamp = _parse_timestamp_text(_find_child_text(elem, "time"))
+        records.append(
+            DanfossHistoryRecord(
+                timestamp=timestamp,
+                value=_numeric_value(raw_value),
+                raw_value=raw_value,
+                unit=_find_child_text(elem, "unit") or unit,
+            )
+        )
+    return records
+
+
+def parse_device_alarms_response(root: ET.Element) -> DanfossDeviceAlarms:
+    return DanfossDeviceAlarms(
+        active=_parse_alarm_refs(root, "active"),
+        acked=_parse_alarm_refs(root, "acked"),
+        cleared=_parse_alarm_refs(root, "cleared"),
+        newest_time=_find_nested_text(root, "newest", "time"),
+        oldest_time=_find_nested_text(root, "oldest", "time"),
+    )
+
+
 def decode_query_data(
     raw_data: bytes,
     query_id: int,
@@ -467,6 +692,24 @@ def _common_attrs(action: str, lang: str = "e") -> Dict[str, str]:
     return attrs
 
 
+def _append_time_element(
+    parent: ET.Element,
+    tag: str,
+    value: Union[datetime, int, float],
+) -> None:
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = datetime.fromtimestamp(float(value))
+    child = ET.SubElement(parent, tag)
+    ET.SubElement(child, "year").text = dt.strftime("%y")
+    ET.SubElement(child, "month").text = dt.strftime("%m")
+    ET.SubElement(child, "day").text = dt.strftime("%d")
+    ET.SubElement(child, "hour").text = dt.strftime("%H")
+    ET.SubElement(child, "minute").text = dt.strftime("%M")
+    ET.SubElement(child, "second").text = dt.strftime("%S")
+
+
 def _xml_empty(tag: str, attrs: Mapping[str, object]) -> str:
     elem = ET.Element(tag, {str(k): str(v) for k, v in attrs.items() if v is not None})
     return ET.tostring(elem, encoding="unicode", short_empty_elements=True)
@@ -523,6 +766,34 @@ def _numeric_value(raw_value: str) -> Optional[float]:
         return float(match.group(0))
     except ValueError:
         return None
+
+
+def _parse_alarm_refs(root: ET.Element, state: str) -> List[DanfossAlarmRef]:
+    parent = root.find(state)
+    if parent is None:
+        return []
+    refs = []
+    for ref in parent.findall("ref"):
+        refs.append(
+            DanfossAlarmRef(
+                state=state,
+                alarm_id=(ref.text or "").strip(),
+                name=ref.attrib.get("name", ""),
+            )
+        )
+    return refs
+
+
+def _parse_timestamp_text(text: str) -> Optional[datetime]:
+    text = (text or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%m/%d/%y %H:%M:%S", "%I:%M%p %m/%d/%y"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            pass
+    return None
 
 
 def _find_child_text(root: ET.Element, child_name: str) -> str:

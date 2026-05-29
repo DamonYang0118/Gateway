@@ -84,8 +84,16 @@ def make_handler(state: Mock850AState):
                 return self.xml_bytes(build_read_val_response(root, state))
             if action == "read_devices":
                 return self.xml_bytes(build_read_devices_response(state))
+            if action == "read_parm_info":
+                return self.xml_bytes(build_read_parm_info_response(root, state))
             if action == "read_device_history_cfg":
                 return self.xml_bytes(build_history_cfg_response(state))
+            if action == "read_history":
+                return self.xml_bytes(build_read_history_response(root))
+            if action == "read_device_alarms":
+                return self.xml_bytes(build_device_alarms_response(root))
+            if action == "read_generic_alarms":
+                return self.xml_bytes(build_generic_alarms_response())
             if action == "start_history_query":
                 return self.xml_bytes(
                     '<resp action="start_history_query" error="0"><query_id>1</query_id></resp>'
@@ -189,6 +197,54 @@ def build_history_cfg_response(state: Mock850AState) -> str:
         + "".join(items)
         + f"<timezone>800</timezone><daylightsavings>0</daylightsavings>"
         f"<current_secs>{int(time.time())}</current_secs><total_points>{len(items)}</total_points></resp>"
+    )
+
+
+def build_read_parm_info_response(root: ET.Element, state: Mock850AState) -> str:
+    parms = []
+    for point in state.points[:100]:
+        attrs = {
+            "cid": point.get("cid", 0),
+            "vid": point.get("vid", point.get("address", 0)),
+            "name": point.get("name", point.get("tag", "")),
+            "unit": point.get("unit", ""),
+            "rw": "R",
+        }
+        parms.append(f"<parm {format_attrs(attrs)} />")
+    device_id = root.attrib.get("device_id", "MOCK_850A")
+    return f'<resp action="read_parm_info" device_id="{escape(device_id)}" error="0"><parms>{"".join(parms)}</parms></resp>'
+
+
+def build_read_history_response(root: ET.Element) -> str:
+    now = int(time.time()) - 300
+    unit = root.attrib.get("units", "s")
+    return (
+        '<resp action="read_history" error="0" real_sample_rate="60">'
+        f"<unit>{escape(unit)}</unit><starttime><epoch>{now}</epoch></starttime>"
+        "<data><y>48</y><y>49.5</y><y>-----</y><y>51</y><y>50</y></data>"
+        "</resp>"
+    )
+
+
+def build_device_alarms_response(root: ET.Element) -> str:
+    return (
+        '<resp action="read_device_alarms" error="0">'
+        "<newest><time>05:17PM 05/04/25</time></newest>"
+        "<oldest><time>05:10PM 05/04/25</time></oldest>"
+        '<active><ref name="Mock active alarm">1001</ref></active>'
+        '<acked><ref name="Mock acknowledged alarm">1002</ref></acked>'
+        '<cleared><ref name="Mock cleared alarm">1003</ref></cleared>'
+        "</resp>"
+    )
+
+
+def build_generic_alarms_response() -> str:
+    return (
+        '<resp action="read_generic_alarms" error="0">'
+        '<alarm id="2001" name="NTPfailure" state="active">'
+        "<device>Mock AK-SM800A</device><time>05:17PM 05/04/25</time>"
+        "<description>NTPfailure mock alarm</description>"
+        "</alarm></resp>"
     )
 
 

@@ -18,7 +18,7 @@
   "danfoss_cache_file": "danfoss_last_good.customer.json",
   "use_cached_value_if_http_fail": true,
   "http_timeout_sec": 5,
-  "use_simulation_if_http_fail": true,
+  "use_simulation_if_http_fail": false,
   "low_limit": 41.0,
   "high_limit": 49.0,
   "deadband": 0.5,
